@@ -1,0 +1,24 @@
+# Arquivos de configuração local com tokens privados
+config.json
+history.json
+src/config.json
+src/history.json
+
+# Cache do Python
+__pycache__/
+*.py[cod]
+*$py.class
+src/__pycache__/
+
+# Diretórios temporários de anexos
+devops_demandas_attachments/
+
+# Ambientes virtuais
+venv/
+.venv/
+env/
+
+# Builds / PyInstaller
+dist/
+build/
+*.spec

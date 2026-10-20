@@ -1,0 +1,37 @@
+{
+  "organization": "",
+  "project": "",
+  "projects_list": [
+    "One_FrontEnd"
+  ],
+  "work_item_type": "Spike",
+  "work_item_types_list": [
+    "Spike",
+    "Bug",
+    "User Story",
+    "Task",
+    "Product Backlog Item"
+  ],
+  "default_tags": "DemandasSistemaSuporte",
+  "default_reported_by": "",
+  "default_urgency": "4",
+  "default_area_path": "",
+  "default_iteration_path": "",
+  "modules_list": [
+    "Outro",
+    "Agenda",
+    "Financeiro",
+    "Clientes",
+    "Colaboradores",
+    "Estoque",
+    "Produtos",
+    "Serviços",
+    "Relatórios",
+    "Caixa",
+    "Configurações",
+    "Comissões",
+    "Login / Acesso"
+  ],
+  "pat": "",
+  "include_print_em_anexo": true
+}
