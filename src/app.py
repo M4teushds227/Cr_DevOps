@@ -1869,6 +1869,107 @@ class DevOpsDemandasApp(ctk.CTk):
         self.lbl_cfg_status.configure(text="✅ Configurações salvas com sucesso!", text_color="#89e09d")
         self.lbl_feedback.configure(text="✅ Configurações atualizadas e prontas para uso.", text_color="#89e09d")
 
+    def _download_and_self_update(self, new_version: str, download_url: str):
+        """Baixa o novo executável em segundo plano, substitui o atual e reinicia o aplicativo automaticamente."""
+        import subprocess
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Atualizando Aplicativo...")
+        dlg.geometry("450x170")
+        dlg.resizable(False, False)
+        dlg.configure(fg_color=self.bg_dark)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 225
+        y = self.winfo_y() + (self.winfo_height() // 2) - 85
+        dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+        lbl_info = ctk.CTkLabel(
+            dlg,
+            text=f"⬇️ Baixando atualização v{new_version}...",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#89e09d"
+        )
+        lbl_info.pack(padx=20, pady=(20, 10))
+
+        progress_bar = ctk.CTkProgressBar(dlg, width=380, height=14)
+        progress_bar.pack(padx=20, pady=(5, 10))
+        progress_bar.set(0)
+
+        lbl_status = ctk.CTkLabel(dlg, text="Conectando ao GitHub...", font=ctk.CTkFont(size=12), text_color=self.text_muted)
+        lbl_status.pack(padx=20, pady=(0, 15))
+
+        def update_worker():
+            try:
+                import requests
+                headers = {"User-Agent": "DevOps-Demandas-App"}
+                resp = requests.get(download_url, headers=headers, stream=True, timeout=30)
+                if resp.status_code != 200:
+                    raise Exception(f"Falha ao baixar arquivo (HTTP {resp.status_code})")
+
+                total_size = int(resp.headers.get("content-length", 0))
+                temp_new_exe = os.path.join(tempfile.gettempdir(), f"DevOpsDemandas_v{new_version}.exe")
+
+                downloaded = 0
+                with open(temp_new_exe, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                frac = downloaded / total_size
+                                def update_p(p=frac, d=downloaded, t=total_size):
+                                    progress_bar.set(p)
+                                    mb_d = d / (1024 * 1024)
+                                    mb_t = t / (1024 * 1024)
+                                    lbl_status.configure(text=f"{mb_d:.1f} MB de {mb_t:.1f} MB ({int(p*100)}%)")
+                                self.after(0, update_p)
+
+                def finalize():
+                    lbl_info.configure(text="✅ Download concluído! Reiniciando...")
+                    lbl_status.configure(text="Aplicando nova versão...")
+                    
+                    # Caminho do executável atual em execução
+                    current_exe = sys.executable if getattr(sys, "frozen", False) else os.path.join(APP_DIR, "..", "DevOpsDemandas.exe")
+                    current_exe = os.path.abspath(current_exe)
+                    
+                    # Cria script batch para substituir o executável assim que este processo fechar e reabrir o novo
+                    updater_bat = os.path.join(tempfile.gettempdir(), "devops_self_update.bat")
+                    bat_content = f"""@echo off
+timeout /t 1 /nobreak > nul
+:retry
+move /y "{temp_new_exe}" "{current_exe}" > nul 2>&1
+if errorlevel 1 (
+    timeout /t 1 /nobreak > nul
+    goto retry
+)
+start "" "{current_exe}"
+del "%~f0"
+"""
+                    with open(updater_bat, "w", encoding="utf-8") as bf:
+                        bf.write(bat_content)
+
+                    # Executa o batch oculto e fecha o programa atual
+                    subprocess.Popen(["cmd.exe", "/c", updater_bat], creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                    self.destroy()
+                    sys.exit(0)
+
+                self.after(500, finalize)
+
+            except Exception as e:
+                err_m = str(e)
+                def on_dl_err():
+                    dlg.destroy()
+                    messagebox.showerror(
+                        "Falha na Atualização",
+                        f"Não foi possível baixar e aplicar a atualização automaticamente:\n\n{err_m}\n\nVocê pode baixar manualmente pelo repositório."
+                    )
+                self.after(0, on_dl_err)
+
+        threading.Thread(target=update_worker, daemon=True).start()
+
     def check_for_updates(self, manual: bool = False):
         """Verifica no GitHub se existe uma release ou versão mais recente do código."""
         repo = GITHUB_REPO
@@ -1879,6 +1980,7 @@ class DevOpsDemandasApp(ctk.CTk):
         def worker():
             api_url = f"https://api.github.com/repos/{repo}/releases/latest"
             raw_url = f"https://raw.githubusercontent.com/{repo}/main/src/app.py"
+            raw_exe_url = f"https://github.com/{repo}/raw/main/DevOpsDemandas.exe"
             try:
                 import requests
                 headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "DevOps-Demandas-App"}
@@ -1895,11 +1997,15 @@ class DevOpsDemandasApp(ctk.CTk):
                 # 2. Se houver release oficial no GitHub
                 resp = requests.get(api_url, headers=headers, timeout=6)
                 release_tag = None
-                download_url = f"https://github.com/{repo}/releases"
+                download_exe_url = raw_exe_url
                 if resp.status_code == 200:
                     data = resp.json()
                     release_tag = data.get("tag_name", "").lstrip("v").strip()
-                    download_url = data.get("html_url", download_url)
+                    assets = data.get("assets", [])
+                    for a in assets:
+                        if a.get("name", "").endswith(".exe"):
+                            download_exe_url = a.get("browser_download_url", download_exe_url)
+                            break
 
                 new_version = release_tag or remote_version
 
@@ -1915,9 +2021,9 @@ class DevOpsDemandasApp(ctk.CTk):
                             f"Existe uma nova versão disponível no GitHub!\n\n"
                             f"Versão instalada: v{APP_VERSION}\n"
                             f"Nova versão: v{new_version}\n\n"
-                            f"Deseja abrir a página do GitHub para atualizar agora?"
+                            f"Deseja atualizar agora automaticamente?"
                         ):
-                            webbrowser.open(f"https://github.com/{repo}")
+                            self._download_and_self_update(new_version, download_exe_url)
                     else:
                         self.lbl_cfg_status.configure(
                             text=f"✅ O aplicativo está atualizado! (v{APP_VERSION})",
