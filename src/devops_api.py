@@ -203,6 +203,57 @@ class AzureDevOpsClient:
         else:
             raise Exception(f"Falha ao enviar anexo '{file_name}' (HTTP {resp.status_code}): {resp.text[:200]}")
 
+    def add_attachment_to_work_item(self, project: str, work_item_id: int, attachment_url: str, file_name: str = ""):
+        """Link an uploaded attachment to an existing work item via JSON Patch."""
+        url = f"{self.base_url}/{quote(project.strip())}/_apis/wit/workitems/{int(work_item_id)}?api-version=7.1"
+        headers = self._get_headers(content_type="application/json-patch+json")
+        patch_doc = [
+            {
+                "op": "add",
+                "path": "/relations/-",
+                "value": {
+                    "rel": "AttachedFile",
+                    "url": attachment_url,
+                    "attributes": {
+                        "comment": f"Anexo enviado via Cadastrador Rápido DevOps ({file_name})" if file_name else "Anexo"
+                    }
+                }
+            }
+        ]
+        resp = requests.patch(url, headers=headers, data=json.dumps(patch_doc), timeout=20)
+        if resp.status_code not in (200, 201):
+            raise Exception(f"Falha ao vincular anexo ao item #{work_item_id} (HTTP {resp.status_code}): {resp.text[:200]}")
+        return resp.json()
+
+    def download_attachment(self, attachment_url: str, save_path: str = None) -> str:
+        """Download an attachment from Azure DevOps WIT store using PAT authentication."""
+        token_bytes = f":{self.pat}".encode("utf-8")
+        b64_token = base64.b64encode(token_bytes).decode("utf-8")
+        headers = {
+            "Authorization": f"Basic {b64_token}",
+            "Accept": "application/octet-stream"
+        }
+        resp = requests.get(attachment_url, headers=headers, timeout=30, allow_redirects=True)
+        if resp.status_code != 200:
+            raise Exception(f"Erro ao baixar anexo (HTTP {resp.status_code})")
+
+        if not save_path:
+            import tempfile
+            clean_name = attachment_url.split("?")[0].split("/")[-1]
+            ext = os.path.splitext(clean_name)[1]
+            if not ext:
+                ext = ".png"
+            temp_dir = os.path.join(tempfile.gettempdir(), "devops_demandas_attachments")
+            os.makedirs(temp_dir, exist_ok=True)
+            fn = f"devops_att_{uuid.uuid4().hex[:6]}_{clean_name}"
+            if not fn.endswith(ext):
+                fn += ext
+            save_path = os.path.join(temp_dir, fn)
+
+        with open(save_path, "wb") as f:
+            f.write(resp.content)
+        return save_path
+
     def create_demand(
         self,
         project: str,
@@ -221,14 +272,33 @@ class AzureDevOpsClient:
         project = project.strip()
         work_item_type = work_item_type.strip()
 
+        # 1. Upload attachments first to obtain URLs
         uploaded_attachments = []
         if attachment_paths:
             for path in attachment_paths:
                 if os.path.exists(path):
                     att_name = os.path.basename(path)
-                    att_url = self.upload_attachment(project, path, att_name)
-                    if att_url:
-                        uploaded_attachments.append((att_name, att_url))
+                    try:
+                        att_url = self.upload_attachment(project, path, att_name)
+                        if att_url:
+                            uploaded_attachments.append((att_name, att_url, path))
+                    except Exception as e:
+                        print(f"Erro ao subir anexo '{att_name}': {e}")
+
+        # Embed images directly in Description HTML so they render inline in DevOps web UI
+        if uploaded_attachments:
+            img_snippets = []
+            for att_name, att_url, _ in uploaded_attachments:
+                if att_name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")):
+                    img_snippets.append(
+                        f'<div style="margin-top:12px; margin-bottom:8px;"><p><b>📸 Print Anexo ({att_name}):</b></p>'
+                        f'<img src="{att_url}" alt="{att_name}" style="max-width:100%; border:1px solid #ddd; border-radius:4px;" /></div>'
+                    )
+                else:
+                    img_snippets.append(
+                        f'<div style="margin-top:6px;"><p>📎 <b>Anexo:</b> <a href="{att_url}">{att_name}</a></p></div>'
+                    )
+            description_html += "".join(img_snippets)
 
         field_map = self.get_work_item_fields(project, work_item_type)
 
@@ -263,17 +333,6 @@ class AzureDevOpsClient:
         if iteration_path and iteration_path.strip():
             base_ops.append({"op": "add", "path": "/fields/System.IterationPath", "value": iteration_path.strip()})
 
-        for att_name, att_url in uploaded_attachments:
-            base_ops.append({
-                "op": "add",
-                "path": "/relations/-",
-                "value": {
-                    "rel": "AttachedFile",
-                    "url": att_url,
-                    "attributes": {"comment": f"Anexo enviado via Cadastrador Rápido DevOps ({att_name})"}
-                }
-            })
-
         custom_ops = []
         if noticed_at_iso:
             custom_ops.append({"op": "add", "path": f"/fields/{noticed_ref}", "value": noticed_at_iso})
@@ -289,34 +348,50 @@ class AzureDevOpsClient:
 
         full_ops = base_ops + custom_ops
         resp = requests.post(url, headers=headers, data=json.dumps(full_ops), timeout=20)
+        created_item = None
+        warnings = []
 
         if resp.status_code in (200, 201):
-            return self._parse_work_item_response(resp.json(), project, warnings=[])
-
-        if custom_ops and resp.status_code == 400:
+            created_item = resp.json()
+        elif custom_ops and resp.status_code == 400:
             custom_ops_str = [{"op": op["op"], "path": op["path"], "value": str(op["value"])} for op in custom_ops]
             resp_retry1 = requests.post(url, headers=headers, data=json.dumps(base_ops + custom_ops_str), timeout=20)
             if resp_retry1.status_code in (200, 201):
-                return self._parse_work_item_response(resp_retry1.json(), project, warnings=[])
+                created_item = resp_retry1.json()
+            else:
+                if extra_details_in_desc:
+                    for op in base_ops:
+                        if op["path"] == "/fields/System.Description":
+                            op["value"] = description_html + extra_details_in_desc
+                resp_fallback = requests.post(url, headers=headers, data=json.dumps(base_ops), timeout=20)
+                if resp_fallback.status_code in (200, 201):
+                    created_item = resp_fallback.json()
+                    warnings.append("Nota: Alguns campos personalizados não existem neste tipo de item e foram incluídos na Descrição.")
 
-            if extra_details_in_desc:
-                for op in base_ops:
-                    if op["path"] == "/fields/System.Description":
-                        op["value"] = description_html + extra_details_in_desc
-            resp_fallback = requests.post(url, headers=headers, data=json.dumps(base_ops), timeout=20)
-            if resp_fallback.status_code in (200, 201):
-                warn_msg = "Nota: Alguns campos personalizados não existem neste tipo de item e foram incluídos na Descrição."
-                return self._parse_work_item_response(resp_fallback.json(), project, warnings=[warn_msg])
+        if not created_item:
+            err_msg = f"Erro HTTP {resp.status_code}"
+            try:
+                err_json = resp.json()
+                if "message" in err_json:
+                    err_msg = err_json["message"]
+            except Exception:
+                err_msg = resp.text[:300]
+            raise Exception(err_msg)
 
-        err_msg = f"Erro HTTP {resp.status_code}"
+        created_id = created_item.get("id")
+
+        # 2. Link each uploaded attachment to the created work item as an AttachedFile relation
+        for att_name, att_url, _ in uploaded_attachments:
+            try:
+                self.add_attachment_to_work_item(project, created_id, att_url, att_name)
+            except Exception as e:
+                print(f"Aviso ao vincular anexo {att_name} ao card #{created_id}: {e}")
+
+        # Fetch fully populated work item detail (now with attached relations)
         try:
-            err_json = resp.json()
-            if "message" in err_json:
-                err_msg = err_json["message"]
+            return self.get_work_item(project, created_id)
         except Exception:
-            err_msg = resp.text[:300]
-
-        raise Exception(err_msg)
+            return self._parse_work_item_response(created_item, project, warnings=warnings)
 
     # -------------------------------------------------------------------------
     # DASHBOARD, QUERIES & WORK ITEM EDITING
@@ -357,7 +432,7 @@ class AzureDevOpsClient:
             return []
         batch_ids = [str(i) for i in ids[:200]]
         ids_param = ",".join(batch_ids)
-        url = f"{self.base_url}/{quote(project.strip())}/_apis/wit/workitems?ids={ids_param}&api-version=7.1"
+        url = f"{self.base_url}/{quote(project.strip())}/_apis/wit/workitems?ids={ids_param}&$expand=all&api-version=7.1"
         resp = requests.get(url, headers=self._get_headers(), timeout=15)
         if resp.status_code != 200:
             return []
@@ -485,6 +560,22 @@ class AzureDevOpsClient:
     ):
         """Update fields, add comments, or attach files to an existing Work Item."""
         project = project.strip()
+        work_item_id = int(work_item_id)
+
+        # 1. Upload and link any new attachments first
+        uploaded_atts = []
+        if attachment_paths:
+            for path in attachment_paths:
+                if os.path.exists(path):
+                    att_name = os.path.basename(path)
+                    try:
+                        att_url = self.upload_attachment(project, path, att_name)
+                        if att_url:
+                            uploaded_atts.append((att_name, att_url))
+                            self.add_attachment_to_work_item(project, work_item_id, att_url, att_name)
+                    except Exception as e:
+                        print(f"Erro ao anexar arquivo '{path}' no card #{work_item_id}: {e}")
+
         ops = []
 
         if title is not None:
@@ -502,9 +593,28 @@ class AzureDevOpsClient:
         if description_html is not None:
             ops.append({"op": "add", "path": "/fields/System.Description", "value": description_html})
 
+        # Embed images into history discussion
+        img_comment_snips = []
+        if uploaded_atts:
+            for att_name, att_url in uploaded_atts:
+                if att_name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")):
+                    img_comment_snips.append(
+                        f'<div style="margin-top:6px;"><p><b>📸 Print Anexado ({att_name}):</b></p>'
+                        f'<img src="{att_url}" alt="{att_name}" style="max-width:100%; border:1px solid #ddd; border-radius:4px;" /></div>'
+                    )
+                else:
+                    img_comment_snips.append(
+                        f'<div style="margin-top:4px;"><p>📎 Anexo: <a href="{att_url}">{att_name}</a></p></div>'
+                    )
+
+        full_comment = ""
         if comment and comment.strip():
-            comment_html = plain_text_to_html(comment.strip())
-            ops.append({"op": "add", "path": "/fields/System.History", "value": comment_html})
+            full_comment += plain_text_to_html(comment.strip())
+        if img_comment_snips:
+            full_comment += "".join(img_comment_snips)
+
+        if full_comment:
+            ops.append({"op": "add", "path": "/fields/System.History", "value": full_comment})
 
         if urgency is not None and str(urgency).strip():
             urg_str = str(urgency).strip()
@@ -514,47 +624,37 @@ class AzureDevOpsClient:
         if reported_by is not None:
             ops.append({"op": "add", "path": "/fields/MMToolsProcess.ReportedBy", "value": reported_by.strip()})
 
-        if attachment_paths:
-            for path in attachment_paths:
-                if os.path.exists(path):
-                    att_name = os.path.basename(path)
-                    att_url = self.upload_attachment(project, path, att_name)
-                    if att_url:
-                        ops.append({
-                            "op": "add",
-                            "path": "/relations/-",
-                            "value": {
-                                "rel": "AttachedFile",
-                                "url": att_url,
-                                "attributes": {"comment": f"Anexo adicionado na edição ({att_name})"}
-                            }
-                        })
+        if ops:
+            url = f"{self.base_url}/{quote(project)}/_apis/wit/workitems/{work_item_id}?api-version=7.1"
+            headers = self._get_headers(content_type="application/json-patch+json")
+            resp = requests.patch(url, headers=headers, data=json.dumps(ops), timeout=20)
 
-        if not ops:
-            return self.get_work_item(project, work_item_id)
+            if resp.status_code not in (200, 201):
+                # Fallback if MMToolsProcess custom fields don't exist on another project template
+                if resp.status_code == 400:
+                    ops_fallback = [op for op in ops if not op["path"].startswith("/fields/MMToolsProcess.")]
+                    resp2 = requests.patch(url, headers=headers, data=json.dumps(ops_fallback), timeout=20)
+                    if resp2.status_code not in (200, 201):
+                        err_msg = f"Erro HTTP {resp2.status_code}"
+                        try:
+                            err_json = resp2.json()
+                            if "message" in err_json:
+                                err_msg = err_json["message"]
+                        except Exception:
+                            err_msg = resp2.text[:300]
+                        raise Exception(err_msg)
+                else:
+                    err_msg = f"Erro HTTP {resp.status_code}"
+                    try:
+                        err_json = resp.json()
+                        if "message" in err_json:
+                            err_msg = err_json["message"]
+                    except Exception:
+                        err_msg = resp.text[:300]
+                    raise Exception(err_msg)
 
-        url = f"{self.base_url}/{quote(project)}/_apis/wit/workitems/{int(work_item_id)}?api-version=7.1"
-        headers = self._get_headers(content_type="application/json-patch+json")
-        resp = requests.patch(url, headers=headers, data=json.dumps(ops), timeout=20)
-
-        if resp.status_code in (200, 201):
-            return self._format_work_item_detail(resp.json(), project)
-
-        # Fallback if MMToolsProcess custom fields don't exist on another project template
-        if resp.status_code == 400:
-            ops_fallback = [op for op in ops if not op["path"].startswith("/fields/MMToolsProcess.")]
-            resp2 = requests.patch(url, headers=headers, data=json.dumps(ops_fallback), timeout=20)
-            if resp2.status_code in (200, 201):
-                return self._format_work_item_detail(resp2.json(), project)
-
-        err_msg = f"Erro HTTP {resp.status_code}"
-        try:
-            err_json = resp.json()
-            if "message" in err_json:
-                err_msg = err_json["message"]
-        except Exception:
-            err_msg = resp.text[:300]
-        raise Exception(err_msg)
+        # Return latest state with all updated attachments
+        return self.get_work_item(project, work_item_id)
 
     def _format_work_item_detail(self, data: dict, project: str):
         wi_id = data.get("id")
@@ -585,7 +685,19 @@ class AzureDevOpsClient:
             web_url = f"{self.base_url}/{quote(team_project)}/_workitems/edit/{wi_id}"
 
         relations = data.get("relations", []) or []
-        attachments_count = sum(1 for r in relations if r.get("rel") == "AttachedFile")
+        attachments = []
+        for r in relations:
+            if r.get("rel") == "AttachedFile":
+                att_url = r.get("url", "")
+                attrs = r.get("attributes", {}) or {}
+                name = attrs.get("name") or "anexo.png"
+                size = attrs.get("resourceSize", 0)
+                attachments.append({
+                    "url": att_url,
+                    "name": name,
+                    "size": size,
+                    "comment": attrs.get("comment", "")
+                })
 
         return {
             "id": wi_id,
@@ -602,7 +714,8 @@ class AzureDevOpsClient:
             "description_plain": description_plain,
             "project": team_project,
             "url": web_url,
-            "attachments_count": attachments_count
+            "attachments": attachments,
+            "attachments_count": len(attachments)
         }
 
     def _parse_work_item_response(self, data: dict, project: str, warnings: list):

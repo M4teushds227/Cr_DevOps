@@ -28,7 +28,7 @@ from devops_api import AzureDevOpsClient, plain_text_to_html
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 GITHUB_REPO = "M4teushds227/Cr_DevOps"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
@@ -1117,6 +1117,164 @@ class DevOpsDemandasApp(ctk.CTk):
             btn_cp.grid(row=0, column=5, padx=2)
 
     # -------------------------------------------------------------------------
+    # IMAGE VIEWER MODAL (Open Screen with Full Print)
+    # -------------------------------------------------------------------------
+    def open_image_viewer_modal(self, source_path_or_url: str, title: str = "Visualizar Print", is_remote: bool = False):
+        """Open a dedicated window displaying the print / screenshot."""
+        viewer = ctk.CTkToplevel(self)
+        viewer.title(f"Visualizador de Print - {title}")
+        viewer.geometry("920x680")
+        viewer.minsize(640, 480)
+        viewer.configure(fg_color=self.bg_dark)
+        viewer.transient(self)
+
+        self.update_idletasks()
+        vx = self.winfo_x() + (self.winfo_width() // 2) - 460
+        vy = self.winfo_y() + (self.winfo_height() // 2) - 340
+        viewer.geometry(f"+{max(0, vx)}+{max(0, vy)}")
+
+        viewer.grid_columnconfigure(0, weight=1)
+        viewer.grid_rowconfigure(1, weight=1)
+
+        # Top Bar
+        top_bar = ctk.CTkFrame(viewer, fg_color=self.card_bg, corner_radius=6)
+        top_bar.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 6))
+        top_bar.grid_columnconfigure(0, weight=1)
+
+        lbl_info = ctk.CTkLabel(
+            top_bar,
+            text=f"🖼️ {title}",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            anchor="w"
+        )
+        lbl_info.grid(row=0, column=0, sticky="w", padx=12, pady=8)
+
+        btn_box = ctk.CTkFrame(top_bar, fg_color="transparent")
+        btn_box.grid(row=0, column=1, sticky="e", padx=10, pady=6)
+
+        resolved_path = [None]
+        if not is_remote and os.path.exists(source_path_or_url):
+            resolved_path[0] = source_path_or_url
+
+        def open_in_windows():
+            if resolved_path[0] and os.path.exists(resolved_path[0]):
+                os.startfile(resolved_path[0])
+            else:
+                messagebox.showinfo("Aviso", "Aguarde o carregamento da imagem...", parent=viewer)
+
+        def copy_img_to_clipboard():
+            if resolved_path[0] and os.path.exists(resolved_path[0]):
+                try:
+                    import subprocess
+                    ps_cmd = f"Set-Clipboard -Path '{resolved_path[0]}'"
+                    subprocess.run(["powershell", "-Command", ps_cmd], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    lbl_info.configure(text=f"📋 Print copiado para a área de transferência!", text_color="#89e09d")
+                except Exception as ex:
+                    messagebox.showerror("Erro ao copiar", str(ex), parent=viewer)
+
+        btn_win = ctk.CTkButton(
+            btn_box,
+            text="🔍 Abrir no Windows",
+            height=28,
+            fg_color="#323130",
+            hover_color="#484644",
+            font=ctk.CTkFont(size=11),
+            command=open_in_windows
+        )
+        btn_win.pack(side="left", padx=4)
+
+        btn_copy = ctk.CTkButton(
+            btn_box,
+            text="📋 Copiar",
+            height=28,
+            fg_color="#323130",
+            hover_color="#484644",
+            font=ctk.CTkFont(size=11),
+            command=copy_img_to_clipboard
+        )
+        btn_copy.pack(side="left", padx=4)
+
+        btn_close = ctk.CTkButton(
+            btn_box,
+            text="✕ Fechar",
+            height=28,
+            width=70,
+            fg_color="#5c2d16",
+            hover_color="#80381b",
+            font=ctk.CTkFont(size=11),
+            command=viewer.destroy
+        )
+        btn_close.pack(side="left", padx=(4, 0))
+
+        # Main Viewer Area
+        img_container = ctk.CTkFrame(viewer, fg_color="#181818", corner_radius=8)
+        img_container.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        img_container.grid_columnconfigure(0, weight=1)
+        img_container.grid_rowconfigure(0, weight=1)
+
+        lbl_display = ctk.CTkLabel(
+            img_container,
+            text="⏳ Carregando imagem...",
+            font=ctk.CTkFont(size=13),
+            text_color=self.text_muted
+        )
+        lbl_display.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        viewer._image_ref = None
+
+        def display_local_image(local_path):
+            resolved_path[0] = local_path
+            try:
+                ext = os.path.splitext(local_path)[1].lower()
+                if ext not in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"):
+                    lbl_display.configure(
+                        text=f"📄 Arquivo: {os.path.basename(local_path)}\n\nEste formato não é uma imagem pré-visualizável.\nClique em 'Abrir no Windows' para abri-lo.",
+                        image=None
+                    )
+                    return
+
+                im = Image.open(local_path)
+                orig_w, orig_h = im.size
+                f_size = os.path.getsize(local_path) / 1024.0
+
+                lbl_info.configure(
+                    text=f"🖼️ {title}  •  {orig_w}x{orig_h} px  •  {f_size:.1f} KB",
+                    text_color="white"
+                )
+
+                max_w = max(400, viewer.winfo_width() - 60)
+                max_h = max(300, viewer.winfo_height() - 110)
+
+                scale = min(max_w / orig_w, max_h / orig_h, 1.0)
+                disp_w = int(orig_w * scale)
+                disp_h = int(orig_h * scale)
+
+                ctk_img = ctk.CTkImage(light_image=im, dark_image=im, size=(disp_w, disp_h))
+                viewer._image_ref = ctk_img
+                lbl_display.configure(text="", image=ctk_img)
+            except Exception as e:
+                lbl_display.configure(text=f"❌ Erro ao exibir imagem:\n{e}", image=None)
+
+        if not is_remote:
+            viewer.after(60, lambda: display_local_image(source_path_or_url))
+        else:
+            lbl_display.configure(text="⏳ Baixando print do Azure DevOps...")
+            def download_worker():
+                pat = self.config_data.get("pat", "").strip()
+                org = self.config_data.get("organization", "").strip()
+                try:
+                    client = AzureDevOpsClient(org, pat)
+                    local_f = client.download_attachment(source_path_or_url)
+                    viewer.after(0, lambda: display_local_image(local_f))
+                except Exception as err:
+                    viewer.after(0, lambda: lbl_display.configure(
+                        text=f"❌ Erro ao baixar print do Azure DevOps:\n{err}",
+                        image=None
+                    ))
+
+            threading.Thread(target=download_worker, daemon=True).start()
+
+    # -------------------------------------------------------------------------
     # EDIT WORK ITEM MODAL (Edit Title, State, AssignedTo, Tags, Description, Comment, Attachments)
     # -------------------------------------------------------------------------
     def open_edit_work_item_modal(self, work_item_id: int, project: str = None):
@@ -1131,15 +1289,15 @@ class DevOpsDemandasApp(ctk.CTk):
 
         dlg = ctk.CTkToplevel(self)
         dlg.title(f"Editar Demanda #{work_item_id} - Azure DevOps")
-        dlg.geometry("860x680")
-        dlg.minsize(760, 580)
+        dlg.geometry("960x720")
+        dlg.minsize(860, 620)
         dlg.configure(fg_color=self.bg_dark)
         dlg.transient(self)
         dlg.grab_set()
 
         self.update_idletasks()
-        x = self.winfo_x() + (self.winfo_width() // 2) - 430
-        y = self.winfo_y() + (self.winfo_height() // 2) - 340
+        x = self.winfo_x() + (self.winfo_width() // 2) - 480
+        y = self.winfo_y() + (self.winfo_height() // 2) - 360
         dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
 
         dlg.grid_columnconfigure(0, weight=1)
@@ -1339,22 +1497,33 @@ class DevOpsDemandasApp(ctk.CTk):
             border_width=1,
             border_color="#484644",
             wrap="word",
-            height=120
+            height=90
         )
-        txt_comment.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
+        txt_comment.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
 
-        # Attachments in Edit Modal
+        # --- ÁREA DE PRINTS & ANEXOS ---
         new_att_paths = []
+        existing_attachments = []
+
+        att_section = ctk.CTkFrame(right_edit, fg_color="#1c1b1a", corner_radius=6, border_width=1, border_color="#383635")
+        att_section.grid(row=2, column=0, sticky="nsew", pady=(2, 0))
+        att_section.grid_columnconfigure(0, weight=1)
+        att_section.grid_rowconfigure(2, weight=1)
+
+        att_header_box = ctk.CTkFrame(att_section, fg_color="transparent")
+        att_header_box.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 4))
+        att_header_box.grid_columnconfigure(0, weight=1)
+
         lbl_edit_att = ctk.CTkLabel(
-            right_edit,
-            text="📎 Novos Anexos para enviar (0)",
+            att_header_box,
+            text="🖼️ Prints e Anexos (0)",
             font=ctk.CTkFont(size=12, weight="bold"),
             anchor="w"
         )
-        lbl_edit_att.grid(row=2, column=0, sticky="ew", pady=(2, 4))
+        lbl_edit_att.grid(row=0, column=0, sticky="w")
 
-        att_btn_box = ctk.CTkFrame(right_edit, fg_color="transparent")
-        att_btn_box.grid(row=3, column=0, sticky="ew")
+        att_btn_box = ctk.CTkFrame(att_section, fg_color="transparent")
+        att_btn_box.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
         att_btn_box.grid_columnconfigure(0, weight=1)
         att_btn_box.grid_columnconfigure(1, weight=1)
 
@@ -1366,25 +1535,36 @@ class DevOpsDemandasApp(ctk.CTk):
                 fp = os.path.join(TEMP_ATTACH_DIR, fn)
                 clip.save(fp, "PNG")
                 new_att_paths.append(fp)
-                lbl_edit_att.configure(text=f"📎 Novos Anexos para enviar ({len(new_att_paths)})", text_color="#89e09d")
+                render_edit_attachments_list()
+                lbl_edit_status.configure(text=f"📸 Print '{fn}' adicionado via Ctrl+V!", text_color="#89e09d")
             elif isinstance(clip, list):
+                added = 0
                 for p in clip:
                     if os.path.isfile(p):
                         new_att_paths.append(p)
-                lbl_edit_att.configure(text=f"📎 Novos Anexos para enviar ({len(new_att_paths)})", text_color="#89e09d")
+                        added += 1
+                if added > 0:
+                    render_edit_attachments_list()
+                    lbl_edit_status.configure(text=f"📎 {added} arquivo(s) adicionado(s)!", text_color="#89e09d")
             else:
-                messagebox.showinfo("Área de Transferência", "Nenhuma imagem encontrada no Ctrl+V.", parent=dlg)
+                messagebox.showinfo("Área de Transferência", "Nenhuma imagem encontrada na área de transferência (Ctrl+V).\n\nTire um print (Win+Shift+S) e tente novamente.", parent=dlg)
 
         def browse_file_to_edit():
             files = filedialog.askopenfilenames(parent=dlg, title="Anexar arquivos à demanda")
             if files:
                 new_att_paths.extend(files)
-                lbl_edit_att.configure(text=f"📎 Novos Anexos para enviar ({len(new_att_paths)})", text_color="#89e09d")
+                render_edit_attachments_list()
+                lbl_edit_status.configure(text=f"📎 {len(files)} anexo(s) adicionado(s)!", text_color="#89e09d")
+
+        def remove_new_att(idx):
+            if 0 <= idx < len(new_att_paths):
+                new_att_paths.pop(idx)
+                render_edit_attachments_list()
 
         ctk.CTkButton(
             att_btn_box,
-            text="📋 Colar Print",
-            height=28,
+            text="📋 Colar Print (Ctrl+V)",
+            height=30,
             fg_color="#2d5a88",
             hover_color="#3972ab",
             font=ctk.CTkFont(size=11, weight="bold"),
@@ -1393,13 +1573,146 @@ class DevOpsDemandasApp(ctk.CTk):
 
         ctk.CTkButton(
             att_btn_box,
-            text="📁 Anexar Arquivo",
-            height=28,
+            text="📁 Anexar Arquivo...",
+            height=30,
             fg_color="#323130",
             hover_color="#484644",
             font=ctk.CTkFont(size=11),
             command=browse_file_to_edit
         ).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+        edit_att_scroll = ctk.CTkScrollableFrame(
+            att_section,
+            fg_color="#141414",
+            corner_radius=4,
+            height=160
+        )
+        edit_att_scroll.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        edit_att_scroll.grid_columnconfigure(0, weight=1)
+
+        def render_edit_attachments_list():
+            for w in edit_att_scroll.winfo_children():
+                w.destroy()
+
+            tot_ex = len(existing_attachments)
+            tot_new = len(new_att_paths)
+            total = tot_ex + tot_new
+            lbl_edit_att.configure(
+                text=f"🖼️ Prints & Anexos ({total} total: {tot_ex} existentes, {tot_new} novos)",
+                text_color="#89e09d" if tot_new > 0 else "white"
+            )
+
+            if total == 0:
+                ctk.CTkLabel(
+                    edit_att_scroll,
+                    text="Nenhum print anexado a este card.\nUse Ctrl+V ou o botão acima para adicionar.",
+                    font=ctk.CTkFont(size=11),
+                    text_color=self.text_muted,
+                    justify="center"
+                ).pack(pady=16, padx=8)
+                return
+
+            if tot_new > 0:
+                ctk.CTkLabel(
+                    edit_att_scroll,
+                    text="Novos Prints (serão salvos no DevOps):",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color="#89e09d",
+                    anchor="w"
+                ).pack(fill="x", padx=4, pady=(4, 2))
+
+                for idx, fp in enumerate(new_att_paths):
+                    row = ctk.CTkFrame(edit_att_scroll, fg_color="#2b2d30", corner_radius=4)
+                    row.pack(fill="x", padx=2, pady=2)
+
+                    fn = os.path.basename(fp)
+                    is_img = fn.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"))
+                    icon = "🖼️" if is_img else "📄"
+
+                    lbl = ctk.CTkLabel(
+                        row,
+                        text=f"{icon} {fn}",
+                        font=ctk.CTkFont(size=11),
+                        anchor="w"
+                    )
+                    lbl.pack(side="left", padx=6, pady=3, fill="x", expand=True)
+
+                    if is_img:
+                        ctk.CTkButton(
+                            row,
+                            text="👁️ Ver",
+                            width=52,
+                            height=22,
+                            fg_color="#2d5a88",
+                            hover_color="#3972ab",
+                            font=ctk.CTkFont(size=10, weight="bold"),
+                            command=lambda p=fp, n=fn: self.open_image_viewer_modal(p, n, is_remote=False)
+                        ).pack(side="right", padx=2, pady=2)
+
+                    ctk.CTkButton(
+                        row,
+                        text="✕",
+                        width=22,
+                        height=22,
+                        fg_color="transparent",
+                        hover_color="#5c2d16",
+                        text_color="#f1707b",
+                        font=ctk.CTkFont(size=11, weight="bold"),
+                        command=lambda i=idx: remove_new_att(i)
+                    ).pack(side="right", padx=(2, 4), pady=2)
+
+            if tot_ex > 0:
+                ctk.CTkLabel(
+                    edit_att_scroll,
+                    text="Existentes no Azure DevOps:",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color="#5bb3ff",
+                    anchor="w"
+                ).pack(fill="x", padx=4, pady=(6, 2))
+
+                for att in existing_attachments:
+                    row = ctk.CTkFrame(edit_att_scroll, fg_color="#212224", corner_radius=4)
+                    row.pack(fill="x", padx=2, pady=2)
+
+                    fn = att.get("name", "anexo.png")
+                    is_img = fn.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"))
+                    icon = "🖼️" if is_img else "📄"
+                    sz_kb = (att.get("size", 0) or 0) / 1024.0
+                    sz_str = f" ({sz_kb:.0f} KB)" if sz_kb > 0 else ""
+
+                    lbl = ctk.CTkLabel(
+                        row,
+                        text=f"{icon} {fn}{sz_str}",
+                        font=ctk.CTkFont(size=11),
+                        anchor="w"
+                    )
+                    lbl.pack(side="left", padx=6, pady=3, fill="x", expand=True)
+
+                    if is_img:
+                        ctk.CTkButton(
+                            row,
+                            text="👁️ Ver Print",
+                            width=78,
+                            height=22,
+                            fg_color="#2d5a88",
+                            hover_color="#3972ab",
+                            font=ctk.CTkFont(size=10, weight="bold"),
+                            command=lambda u=att["url"], n=fn: self.open_image_viewer_modal(u, n, is_remote=True)
+                        ).pack(side="right", padx=(2, 4), pady=2)
+
+        render_edit_attachments_list()
+
+        # Keyboard shortcut Ctrl+V and active modal tracking
+        self._active_edit_dlg = dlg
+        dlg.paste_clip = paste_clip_to_edit
+        dlg.bind("<Control-v>", lambda e: paste_clip_to_edit())
+
+        def on_dlg_close():
+            if getattr(self, "_active_edit_dlg", None) == dlg:
+                self._active_edit_dlg = None
+            dlg.destroy()
+
+        dlg.protocol("WM_DELETE_WINDOW", on_dlg_close)
 
         # Footer Bar
         ftr = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -1416,7 +1729,7 @@ class DevOpsDemandasApp(ctk.CTk):
             height=38,
             fg_color="#323130",
             hover_color="#484644",
-            command=dlg.destroy
+            command=on_dlg_close
         )
         btn_cancel.grid(row=0, column=1, padx=(0, 10))
 
@@ -1459,6 +1772,10 @@ class DevOpsDemandasApp(ctk.CTk):
                     txt_edit_desc.delete("1.0", "end")
                     txt_edit_desc.insert("1.0", wi["description_plain"])
                     original_desc_plain["val"] = wi["description_plain"]
+
+                    existing_attachments.clear()
+                    existing_attachments.extend(wi.get("attachments", []))
+                    render_edit_attachments_list()
 
                     btn_save_edit.configure(state="normal")
                     lbl_edit_status.configure(text="Pronto para edição.", text_color=self.text_muted)
@@ -1527,7 +1844,7 @@ class DevOpsDemandasApp(ctk.CTk):
                             text=f"✅ Demanda #{work_item_id} atualizada com sucesso!",
                             text_color="#89e09d"
                         )
-                        dlg.destroy()
+                        on_dlg_close()
                         if self.tabview.get() == "📊 Dashboards":
                             self.refresh_dashboard()
 
@@ -2073,7 +2390,19 @@ del "%~f0"
         self.bind("<Control-Return>", lambda e: self.submit_demand())
 
     def _on_ctrl_v(self, event=None):
-        """When user presses Ctrl+V in New Demand tab, check if clipboard has an image first."""
+        """Handle global Ctrl+V: if clipboard contains image or files, attach them seamlessly."""
+        active_dlg = getattr(self, "_active_edit_dlg", None)
+        if active_dlg:
+            try:
+                if active_dlg.winfo_exists():
+                    clip = ImageGrab.grabclipboard()
+                    if isinstance(clip, (Image.Image, list)):
+                        if hasattr(active_dlg, "paste_clip"):
+                            active_dlg.paste_clip()
+                            return "break"
+            except Exception:
+                pass
+
         if self.tabview.get() != "➕ Nova Demanda":
             return
         try:
@@ -2093,6 +2422,7 @@ del "%~f0"
                         added += 1
                 if added > 0:
                     self._render_attachments_list()
+                    self.var_print_anexo.set(True)
                     self.lbl_feedback.configure(
                         text=f"📎 {added} arquivo(s) colado(s) da área de transferência!",
                         text_color="#89e09d"
@@ -2203,7 +2533,9 @@ del "%~f0"
             item_row = ctk.CTkFrame(self.att_list_frame, fg_color="#252526", corner_radius=4)
             item_row.pack(fill="x", padx=4, pady=3)
 
-            icon = "🖼️" if att["name"].lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp")) else "📄"
+            is_img = att["name"].lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"))
+            icon = "🖼️" if is_img else "📄"
+
             lbl = ctk.CTkLabel(
                 item_row,
                 text=f"{icon}  {att['name']}",
@@ -2211,6 +2543,19 @@ del "%~f0"
                 anchor="w"
             )
             lbl.pack(side="left", padx=8, pady=4, fill="x", expand=True)
+
+            if is_img:
+                btn_view = ctk.CTkButton(
+                    item_row,
+                    text="👁️ Ver Print",
+                    width=84,
+                    height=24,
+                    fg_color="#2d5a88",
+                    hover_color="#3972ab",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    command=lambda p=att["path"], n=att["name"]: self.open_image_viewer_modal(p, n, is_remote=False)
+                )
+                btn_view.pack(side="right", padx=(2, 4), pady=2)
 
             btn_del = ctk.CTkButton(
                 item_row,
@@ -2222,7 +2567,7 @@ del "%~f0"
                 text_color="#f1707b",
                 command=lambda i=idx: self._remove_attachment(i)
             )
-            btn_del.pack(side="right", padx=4, pady=2)
+            btn_del.pack(side="right", padx=(2, 4), pady=2)
 
     def _set_noticed_at_now(self):
         now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
