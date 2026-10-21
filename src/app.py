@@ -30,7 +30,18 @@ ctk.set_default_color_theme("blue")
 
 APP_VERSION = "1.3.0"
 GITHUB_REPO = "M4teushds227/Cr_DevOps"
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+def get_app_data_dir():
+    # Persist in user's %APPDATA%\DevOpsDemandas so tokens, settings and history survive updates permanently
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        p = os.path.join(appdata, "DevOpsDemandas")
+        os.makedirs(p, exist_ok=True)
+        return p
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+APP_DIR = get_app_data_dir()
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 HISTORY_FILE = os.path.join(APP_DIR, "history.json")
 TEMP_ATTACH_DIR = os.path.join(tempfile.gettempdir(), "devops_demandas_attachments")
@@ -80,9 +91,17 @@ DEFAULT_CONFIG = {
 
 
 def load_json_file(path, default):
-    if os.path.exists(path):
+    target = path
+    if not os.path.exists(target):
+        # Fallback to check next to executable
+        exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+        alt = os.path.join(exe_dir, os.path.basename(path))
+        if os.path.exists(alt):
+            target = alt
+
+    if os.path.exists(target):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(target, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(default, dict):
                     merged = default.copy()
