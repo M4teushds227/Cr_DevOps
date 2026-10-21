@@ -293,7 +293,7 @@ class DevOpsDemandasApp(ctk.CTk):
         self.cmb_type.set(self.config_data.get("work_item_type", "Spike"))
         self.cmb_type.pack(side="left", padx=(0, 14))
 
-        ctk.CTkLabel(meta_row, text="Projeto:", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.text_muted).pack(side="left", padx=(0, 4))
+        # Hidden project selector (defaults to One_FrontEnd)
         self.cmb_project = ctk.CTkComboBox(
             meta_row,
             values=self.config_data.get("projects_list", ["One_FrontEnd"]),
@@ -302,7 +302,6 @@ class DevOpsDemandasApp(ctk.CTk):
             command=self._on_project_changed
         )
         self.cmb_project.set(self.config_data.get("project", "One_FrontEnd"))
-        self.cmb_project.pack(side="left", padx=(0, 14))
 
         ctk.CTkLabel(meta_row, text="Tag:", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.text_muted).pack(side="left", padx=(0, 4))
         self.ent_tags = ctk.CTkEntry(
@@ -731,13 +730,7 @@ class DevOpsDemandasApp(ctk.CTk):
         )
         self.lbl_dash_header_title.pack(side="left", padx=(14, 16), pady=8)
 
-        ctk.CTkLabel(
-            toolbar,
-            text="Projeto:",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=self.text_muted
-        ).pack(side="left", padx=(0, 4))
-
+        # Hidden project selector in dashboard toolbar (defaults to One_FrontEnd)
         self.cmb_dash_project = ctk.CTkComboBox(
             toolbar,
             values=self.config_data.get("projects_list", ["One_FrontEnd"]),
@@ -746,7 +739,6 @@ class DevOpsDemandasApp(ctk.CTk):
             command=lambda _: self._on_dash_project_changed()
         )
         self.cmb_dash_project.set(self.config_data.get("project", "One_FrontEnd"))
-        self.cmb_dash_project.pack(side="left", padx=(0, 12))
 
         ctk.CTkLabel(
             toolbar,
