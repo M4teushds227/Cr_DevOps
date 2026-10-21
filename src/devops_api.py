@@ -107,6 +107,8 @@ class AzureDevOpsClient:
             if resp.status_code == 200:
                 data = resp.json()
                 return True, f"Conectado com sucesso ao projeto '{data.get('name', project)}'!"
+            elif resp.status_code in (203, 302):
+                return False, "Token PAT inválido ou expirado. O Azure DevOps redirecionou para tela de login HTML (HTTP 203/302). Verifique se copiou o token completo."
             elif resp.status_code in (401, 403):
                 return False, "Erro de autenticação (401/403). Verifique se o seu PAT Token está válido e tem permissão de 'Work Items (Read & Write)'."
             elif resp.status_code == 404:
