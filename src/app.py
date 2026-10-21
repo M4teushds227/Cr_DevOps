@@ -36,16 +36,28 @@ TEMP_ATTACH_DIR = os.path.join(tempfile.gettempdir(), "devops_demandas_attachmen
 os.makedirs(TEMP_ATTACH_DIR, exist_ok=True)
 
 DEFAULT_CONFIG = {
-    "organization": "",
-    "project": "",
-    "projects_list": [],
+    "organization": "onebelezabemstar",
+    "project": "One_FrontEnd",
+    "projects_list": [
+        "OneApp_V2",
+        "One_FrontEnd",
+        "OneCentralDeControle_BackEnd",
+        "OneCentralDeControle_FrontEnd",
+        "Conversor",
+        "Repos",
+        "Mobilidade",
+        "OneSQL",
+        "OneBeleza",
+        "One Integrações",
+        "Codinome Fenix"
+    ],
     "work_item_type": "Spike",
     "work_item_types_list": ["Spike", "Bug", "User Story", "Task", "Product Backlog Item"],
-    "default_tags": "DemandasSistemaSuporte",
-    "default_reported_by": "",
-    "default_urgency": "4",
-    "default_area_path": "",
-    "default_iteration_path": "",
+    "default_tags": "Cr - Cadastro Rapido",
+    "default_reported_by": "Cadastro Rapido",
+    "default_urgency": "1",
+    "default_area_path": "One_FrontEnd",
+    "default_iteration_path": "One_FrontEnd",
     "modules_list": [
         "Outro",
         "Agenda",
@@ -1703,7 +1715,7 @@ class DevOpsDemandasApp(ctk.CTk):
         help_box.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(4, 12))
         help_text = (
             "🔑 Como gerar seu Personal Access Token (PAT) no Azure DevOps:\n"
-            "1. No Azure DevOps (dev.azure.com/SUA_ORGANIZACAO), clique no ícone de configurações de usuário (canto superior direito ao lado do seu avatar) > 'Personal access tokens'.\n"
+            "1. No Azure DevOps (dev.azure.com/onebelezabemstar), clique no ícone de configurações de usuário (canto superior direito ao lado do seu avatar) > 'Personal access tokens'.\n"
             "2. Clique em '+ New Token', dê um nome (ex: 'CadastroDemandas') e marque o escopo 'Work Items: Read, write, & manage'.\n"
             "3. Copie o token gerado e cole no campo abaixo."
         )
@@ -1716,14 +1728,9 @@ class DevOpsDemandasApp(ctk.CTk):
             anchor="w"
         ).pack(fill="x", padx=12, pady=10)
 
-        ctk.CTkLabel(settings_scroll, text="Organização Azure DevOps:", font=ctk.CTkFont(weight="bold")).grid(row=2, column=0, sticky="w", padx=16, pady=(6, 2))
-        self.cfg_org = ctk.CTkEntry(settings_scroll, height=32, placeholder_text="Ex: sua_organizacao")
-        self.cfg_org.insert(0, self.config_data.get("organization", ""))
-        self.cfg_org.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
-
-        ctk.CTkLabel(settings_scroll, text="Personal Access Token (PAT):", font=ctk.CTkFont(weight="bold")).grid(row=2, column=1, sticky="w", padx=16, pady=(6, 2))
+        ctk.CTkLabel(settings_scroll, text="Personal Access Token (PAT):", font=ctk.CTkFont(weight="bold")).grid(row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(6, 2))
         pat_frame = ctk.CTkFrame(settings_scroll, fg_color="transparent")
-        pat_frame.grid(row=3, column=1, sticky="ew", padx=16, pady=(0, 8))
+        pat_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
         pat_frame.grid_columnconfigure(0, weight=1)
 
         self.cfg_pat = ctk.CTkEntry(pat_frame, height=32, show="•")
@@ -1742,40 +1749,36 @@ class DevOpsDemandasApp(ctk.CTk):
         )
         self.btn_toggle_pat.grid(row=0, column=1)
 
-        ctk.CTkLabel(settings_scroll, text="Projeto Padrão:", font=ctk.CTkFont(weight="bold")).grid(row=4, column=0, sticky="w", padx=16, pady=(6, 2))
-        self.cfg_project = ctk.CTkEntry(settings_scroll, height=32)
-        self.cfg_project.insert(0, self.config_data.get("project", "One_FrontEnd"))
-        self.cfg_project.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 8))
-
-        ctk.CTkLabel(settings_scroll, text="Tipo de Work Item Padrão (ex: Spike, Bug):", font=ctk.CTkFont(weight="bold")).grid(row=4, column=1, sticky="w", padx=16, pady=(6, 2))
+        ctk.CTkLabel(settings_scroll, text="Tipo de Work Item Padrão (ex: Spike, Bug):", font=ctk.CTkFont(weight="bold")).grid(row=4, column=0, sticky="w", padx=16, pady=(6, 2))
         self.cfg_wi_type = ctk.CTkEntry(settings_scroll, height=32)
         self.cfg_wi_type.insert(0, self.config_data.get("work_item_type", "Spike"))
-        self.cfg_wi_type.grid(row=5, column=1, sticky="ew", padx=16, pady=(0, 8))
+        self.cfg_wi_type.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 8))
 
-        ctk.CTkLabel(settings_scroll, text="Reported By Padrão:", font=ctk.CTkFont(weight="bold")).grid(row=6, column=0, sticky="w", padx=16, pady=(6, 2))
+        ctk.CTkLabel(settings_scroll, text="Reported By Padrão:", font=ctk.CTkFont(weight="bold")).grid(row=4, column=1, sticky="w", padx=16, pady=(6, 2))
         self.cfg_reported_by = ctk.CTkEntry(settings_scroll, height=32)
-        self.cfg_reported_by.insert(0, self.config_data.get("default_reported_by", ""))
-        self.cfg_reported_by.grid(row=7, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self.cfg_reported_by.insert(0, self.config_data.get("default_reported_by", "Cadastro Rapido"))
+        self.cfg_reported_by.grid(row=5, column=1, sticky="ew", padx=16, pady=(0, 8))
 
-        ctk.CTkLabel(settings_scroll, text="Urgency Padrão:", font=ctk.CTkFont(weight="bold")).grid(row=6, column=1, sticky="w", padx=16, pady=(6, 2))
+        ctk.CTkLabel(settings_scroll, text="Urgency Padrão:", font=ctk.CTkFont(weight="bold")).grid(row=6, column=0, sticky="w", padx=16, pady=(6, 2))
         self.cfg_urgency = ctk.CTkEntry(settings_scroll, height=32)
-        self.cfg_urgency.insert(0, str(self.config_data.get("default_urgency", "4")))
-        self.cfg_urgency.grid(row=7, column=1, sticky="ew", padx=16, pady=(0, 8))
+        self.cfg_urgency.insert(0, str(self.config_data.get("default_urgency", "1")))
+        self.cfg_urgency.grid(row=7, column=0, sticky="ew", padx=16, pady=(0, 8))
 
-        ctk.CTkLabel(settings_scroll, text="Tags Padrão (separadas por ponto e vírgula):", font=ctk.CTkFont(weight="bold")).grid(row=8, column=0, sticky="w", padx=16, pady=(6, 2))
+        ctk.CTkLabel(settings_scroll, text="Tags Padrão (separadas por ponto e vírgula):", font=ctk.CTkFont(weight="bold")).grid(row=6, column=1, sticky="w", padx=16, pady=(6, 2))
         self.cfg_tags = ctk.CTkEntry(settings_scroll, height=32)
-        self.cfg_tags.insert(0, self.config_data.get("default_tags", "DemandasSistemaSuporte"))
-        self.cfg_tags.grid(row=9, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self.cfg_tags.insert(0, self.config_data.get("default_tags", "Cr - Cadastro Rapido"))
+        self.cfg_tags.grid(row=7, column=1, sticky="ew", padx=16, pady=(0, 8))
 
-        ctk.CTkLabel(settings_scroll, text="Módulos do Sistema (separados por vírgula):", font=ctk.CTkFont(weight="bold")).grid(row=8, column=1, sticky="w", padx=16, pady=(6, 2))
+        ctk.CTkLabel(settings_scroll, text="Módulos do Sistema (separados por vírgula):", font=ctk.CTkFont(weight="bold")).grid(row=8, column=0, columnspan=2, sticky="w", padx=16, pady=(6, 2))
         self.cfg_modules = ctk.CTkEntry(settings_scroll, height=32)
         self.cfg_modules.insert(0, ", ".join(self.config_data.get("modules_list", DEFAULT_CONFIG["modules_list"])))
-        self.cfg_modules.grid(row=9, column=1, sticky="ew", padx=16, pady=(0, 8))
+        self.cfg_modules.grid(row=9, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
 
         # GitHub Repo config for update checking
         ctk.CTkLabel(settings_scroll, text="Repositório GitHub (usuario/repo) para checagem de versão:", font=ctk.CTkFont(weight="bold")).grid(row=10, column=0, columnspan=2, sticky="w", padx=16, pady=(6, 2))
         self.cfg_github = ctk.CTkEntry(settings_scroll, height=32, placeholder_text="Ex: seu-usuario/seu-repositorio")
         self.cfg_github.insert(0, self.config_data.get("github_repo", ""))
+        self.cfg_github.grid(row=11, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
         self.cfg_github.grid(row=11, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
 
         cfg_btn_row = ctk.CTkFrame(settings_scroll, fg_color="transparent")
@@ -1827,19 +1830,17 @@ class DevOpsDemandasApp(ctk.CTk):
         self.cfg_pat.configure(show="" if self.var_show_pat else "•")
 
     def save_settings(self):
-        org = self.cfg_org.get().strip()
+        org = self.config_data.get("organization", "onebelezabemstar")
         pat = self.cfg_pat.get().strip()
-        proj = self.cfg_project.get().strip()
+        proj = self.config_data.get("project", "One_FrontEnd")
         wi_type = self.cfg_wi_type.get().strip() or "Spike"
-        rep_by = self.cfg_reported_by.get().strip()
-        urgency = self.cfg_urgency.get().strip() or "4"
-        tags = self.cfg_tags.get().strip()
+        rep_by = self.cfg_reported_by.get().strip() or "Cadastro Rapido"
+        urgency = self.cfg_urgency.get().strip() or "1"
+        tags = self.cfg_tags.get().strip() or "Cr - Cadastro Rapido"
         mods_raw = self.cfg_modules.get().strip()
         mods = [m.strip() for m in mods_raw.split(",") if m.strip()] or DEFAULT_CONFIG["modules_list"]
 
-        projects_list = self.config_data.get("projects_list", [])
-        if proj and proj not in projects_list:
-            projects_list.insert(0, proj)
+        projects_list = self.config_data.get("projects_list", DEFAULT_CONFIG["projects_list"])
 
         types_list = self.config_data.get("work_item_types_list", ["Spike", "Bug", "User Story", "Task", "Product Backlog Item"])
         if wi_type not in types_list:
@@ -1863,9 +1864,6 @@ class DevOpsDemandasApp(ctk.CTk):
         })
         save_json_file(CONFIG_FILE, self.config_data)
 
-        self.cmb_project.configure(values=projects_list)
-        self.cmb_project.set(proj)
-        self.cmb_dash_project.configure(values=projects_list)
         self.cmb_type.configure(values=types_list)
         self.cmb_type.set(wi_type)
         self.cmb_modulo.configure(values=mods)
