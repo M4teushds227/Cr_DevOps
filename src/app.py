@@ -29,6 +29,7 @@ ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
 APP_VERSION = "1.2.0"
+GITHUB_REPO = "M4teushds227/Cr_DevOps"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 HISTORY_FILE = os.path.join(APP_DIR, "history.json")
@@ -248,9 +249,8 @@ class DevOpsDemandasApp(ctk.CTk):
                 text_color="#ffaa73"
             )
 
-        # Checagem silenciosa de atualizações se houver repositório configurado
-        if self.config_data.get("github_repo", "").strip():
-            self.after(3000, lambda: self.check_for_updates(manual=False))
+        # Checagem automática de atualizações no GitHub
+        self.after(3000, lambda: self.check_for_updates(manual=False))
 
     def _on_tab_changed(self):
         current = self.tabview.get()
@@ -1774,15 +1774,9 @@ class DevOpsDemandasApp(ctk.CTk):
         self.cfg_modules.insert(0, ", ".join(self.config_data.get("modules_list", DEFAULT_CONFIG["modules_list"])))
         self.cfg_modules.grid(row=9, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
 
-        # GitHub Repo config for update checking
-        ctk.CTkLabel(settings_scroll, text="Repositório GitHub (usuario/repo) para checagem de versão:", font=ctk.CTkFont(weight="bold")).grid(row=10, column=0, columnspan=2, sticky="w", padx=16, pady=(6, 2))
-        self.cfg_github = ctk.CTkEntry(settings_scroll, height=32, placeholder_text="Ex: seu-usuario/seu-repositorio")
-        self.cfg_github.insert(0, self.config_data.get("github_repo", ""))
-        self.cfg_github.grid(row=11, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
-        self.cfg_github.grid(row=11, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
-
+        # Action buttons for settings
         cfg_btn_row = ctk.CTkFrame(settings_scroll, fg_color="transparent")
-        cfg_btn_row.grid(row=12, column=0, columnspan=2, sticky="ew", padx=16, pady=(16, 10))
+        cfg_btn_row.grid(row=10, column=0, columnspan=2, sticky="ew", padx=16, pady=(16, 10))
 
         self.btn_test_conn = ctk.CTkButton(
             cfg_btn_row,
@@ -1819,11 +1813,11 @@ class DevOpsDemandasApp(ctk.CTk):
 
         self.lbl_cfg_status = ctk.CTkLabel(
             settings_scroll,
-            text=f"Versão instalada: v{APP_VERSION}",
+            text=f"Versão instalada: v{APP_VERSION}  |  Repositório: {GITHUB_REPO}",
             font=ctk.CTkFont(size=13),
             anchor="w"
         )
-        self.lbl_cfg_status.grid(row=13, column=0, columnspan=2, sticky="ew", padx=16, pady=(4, 12))
+        self.lbl_cfg_status.grid(row=11, column=0, columnspan=2, sticky="ew", padx=16, pady=(4, 12))
 
     def _toggle_pat_visibility(self):
         self.var_show_pat = not self.var_show_pat
@@ -1846,8 +1840,6 @@ class DevOpsDemandasApp(ctk.CTk):
         if wi_type not in types_list:
             types_list.insert(0, wi_type)
 
-        gh_repo = self.cfg_github.get().strip()
-
         self.config_data.update({
             "organization": org,
             "pat": pat,
@@ -1859,7 +1851,7 @@ class DevOpsDemandasApp(ctk.CTk):
             "default_urgency": urgency,
             "default_tags": tags,
             "modules_list": mods,
-            "github_repo": gh_repo,
+            "github_repo": GITHUB_REPO,
             "include_print_em_anexo": self.var_print_anexo.get()
         })
         save_json_file(CONFIG_FILE, self.config_data)
@@ -1879,76 +1871,62 @@ class DevOpsDemandasApp(ctk.CTk):
 
     def check_for_updates(self, manual: bool = False):
         """Verifica no GitHub se existe uma release ou versão mais recente do código."""
-        repo = self.config_data.get("github_repo", "").strip()
-        if not repo:
-            if manual:
-                messagebox.showinfo(
-                    "Verificação de Atualização",
-                    f"Versão atual: v{APP_VERSION}\n\nPara verificar automaticamente no GitHub, preencha o campo 'Repositório GitHub' (ex: usuario/devops-demandas) e salve as configurações."
-                )
-            return
+        repo = GITHUB_REPO
 
         self.btn_check_update.configure(state="disabled", text="⏳ Checando...")
         self.lbl_cfg_status.configure(text="Consultando GitHub por atualizações...", text_color="#ffaa73")
 
         def worker():
             api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+            raw_url = f"https://raw.githubusercontent.com/{repo}/main/src/app.py"
             try:
                 import requests
                 headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "DevOps-Demandas-App"}
-                resp = requests.get(api_url, headers=headers, timeout=8)
+                
+                # 1. Tenta checar versão mais recente no código do branch main
+                resp_raw = requests.get(raw_url, headers=headers, timeout=6)
+                remote_version = None
+                if resp_raw.status_code == 200:
+                    for line in resp_raw.text.splitlines():
+                        if line.startswith("APP_VERSION ="):
+                            remote_version = line.split("=")[1].strip().strip('"').strip("'")
+                            break
+
+                # 2. Se houver release oficial no GitHub
+                resp = requests.get(api_url, headers=headers, timeout=6)
+                release_tag = None
+                download_url = f"https://github.com/{repo}/releases"
                 if resp.status_code == 200:
                     data = resp.json()
-                    tag = data.get("tag_name", "").lstrip("v").strip()
-                    html_url = data.get("html_url", f"https://github.com/{repo}/releases")
-                    
-                    def on_result():
-                        self.btn_check_update.configure(state="normal", text="🔄 Verificar Atualizações")
-                        if tag and tag != APP_VERSION:
-                            self.lbl_cfg_status.configure(
-                                text=f"✨ Nova versão disponível: v{tag} (Atual: v{APP_VERSION})",
-                                text_color="#ffaa73"
-                            )
-                            if messagebox.askyesno(
-                                "Atualização Disponível!",
-                                f"Existe uma nova versão disponível no GitHub!\n\n"
-                                f"Versão instalada: v{APP_VERSION}\n"
-                                f"Versão mais recente: v{tag}\n\n"
-                                f"Deseja abrir a página de download agora?"
-                            ):
-                                webbrowser.open(html_url)
-                        else:
-                            self.lbl_cfg_status.configure(
-                                text=f"✅ O aplicativo está atualizado! (v{APP_VERSION})",
-                                text_color="#89e09d"
-                            )
-                            if manual:
-                                messagebox.showinfo("Atualizado", f"Seu aplicativo já está na versão mais recente (v{APP_VERSION}).")
-                    self.after(0, on_result)
-                elif resp.status_code == 404:
-                    # Tentar checar commits mais recentes no branch principal
-                    commit_url = f"https://api.github.com/repos/{repo}/commits/main"
-                    r_commit = requests.get(commit_url, headers=headers, timeout=8)
-                    def on_fallback():
-                        self.btn_check_update.configure(state="normal", text="🔄 Verificar Atualizações")
-                        if r_commit.status_code == 200:
-                            c_data = r_commit.json()
-                            sha = c_data.get("sha", "")[:7]
-                            msg = c_data.get("commit", {}).get("message", "").splitlines()[0]
-                            self.lbl_cfg_status.configure(
-                                text=f"Repositório conectado. Último commit no GitHub: {sha} - {msg[:35]}",
-                                text_color="#89e09d"
-                            )
-                            if manual:
-                                messagebox.showinfo("GitHub Conectado", f"Nenhuma release oficial configurada ainda.\nÚltimo commit no branch main: {sha}\n{msg}")
-                        else:
-                            self.lbl_cfg_status.configure(text=f"Repositório '{repo}' não encontrado ou é privado.", text_color="#f1707b")
-                    self.after(0, on_fallback)
-                else:
-                    def on_api_err():
-                        self.btn_check_update.configure(state="normal", text="🔄 Verificar Atualizações")
-                        self.lbl_cfg_status.configure(text=f"Erro ao consultar GitHub (HTTP {resp.status_code})", text_color="#f1707b")
-                    self.after(0, on_api_err)
+                    release_tag = data.get("tag_name", "").lstrip("v").strip()
+                    download_url = data.get("html_url", download_url)
+
+                new_version = release_tag or remote_version
+
+                def on_result():
+                    self.btn_check_update.configure(state="normal", text="🔄 Verificar Atualizações")
+                    if new_version and new_version != APP_VERSION:
+                        self.lbl_cfg_status.configure(
+                            text=f"✨ Nova versão disponível: v{new_version} (Instalada: v{APP_VERSION})",
+                            text_color="#ffaa73"
+                        )
+                        if messagebox.askyesno(
+                            "Atualização Disponível!",
+                            f"Existe uma nova versão disponível no GitHub!\n\n"
+                            f"Versão instalada: v{APP_VERSION}\n"
+                            f"Nova versão: v{new_version}\n\n"
+                            f"Deseja abrir a página do GitHub para atualizar agora?"
+                        ):
+                            webbrowser.open(f"https://github.com/{repo}")
+                    else:
+                        self.lbl_cfg_status.configure(
+                            text=f"✅ O aplicativo está atualizado! (v{APP_VERSION})",
+                            text_color="#89e09d"
+                        )
+                        if manual:
+                            messagebox.showinfo("Atualizado", f"Seu aplicativo já está na versão mais recente (v{APP_VERSION}).")
+
+                self.after(0, on_result)
             except Exception as e:
                 err_msg = str(e)
                 def on_exc():
