@@ -43,8 +43,9 @@ Aplicativo Desktop moderno desenvolvido em Python com interface nativa em **Cust
 ## 🛠️ Pré-requisitos
 
 - **Python 3.10 ou superior** instalado no Windows, Linux ou macOS.
-- **Personal Access Token (PAT)** do Azure DevOps com permissão de:
-  - `Work Items`: **Read, write, & manage**
+- **Personal Access Token (PAT)** do Azure DevOps:
+  > **Como pegar o token:** No Azure DevOps (`dev.azure.com/onebelezabemstar`), clique no ícone de configurações de usuário (canto superior direito ao lado do seu avatar) > Clique nos tres pontinhos > User settings > 'Personal access tokens' > `+ New Token`.
+  - Permissão necessária em `Work Items`: **Read, write, & manage**
 
 ---
 

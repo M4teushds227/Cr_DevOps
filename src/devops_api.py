@@ -41,6 +41,45 @@ def plain_text_to_html(plain_str: str) -> str:
     return "".join(html_parts)
 
 
+def clean_identity_email(raw: str) -> str:
+    """Extract a clean email address from Azure DevOps raw identity string."""
+    if not raw:
+        return ""
+    # Check if there is an email address inside OIDCONFLICT or angle brackets
+    m = re.search(r'([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)', str(raw))
+    if m:
+        val = m.group(1)
+        if "_" in val and "@" in val:
+            val = val.split("_")[-1]
+        return val.lower()
+    return str(raw).strip().lower()
+
+
+def get_identity_initials(name: str) -> str:
+    """Generate 2-letter uppercase initials for avatar badge."""
+    clean_n = re.sub(r'\s+(onebeleza|mmtools)(\.com)?(\.br)?\b', '', str(name), flags=re.IGNORECASE)
+    parts = [p for p in clean_n.replace(".", " ").replace("_", " ").split() if p]
+    if not parts:
+        return "??"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[1][0]).upper()
+
+
+AVATAR_COLORS = [
+    "#0078d4", "#7b1fa2", "#107c41", "#d83b01", "#008272", 
+    "#e81123", "#69797e", "#5c1349", "#004b50", "#8764b8", 
+    "#005a9e", "#498205"
+]
+
+
+def get_avatar_color(name: str) -> str:
+    """Pick a consistent color from palette based on string hash."""
+    h = sum(ord(c) for c in str(name or ""))
+    return AVATAR_COLORS[h % len(AVATAR_COLORS)]
+
+
+
 class AzureDevOpsClient:
     # Categorized Dashboards for One_FrontEnd (with "Equipe de Desenvolvimento - Overview" as the default)
     DASHBOARDS_MAP = {
@@ -108,9 +147,21 @@ class AzureDevOpsClient:
                 data = resp.json()
                 return True, f"Conectado com sucesso ao projeto '{data.get('name', project)}'!"
             elif resp.status_code in (203, 302):
-                return False, "Token PAT inválido ou expirado. O Azure DevOps redirecionou para tela de login HTML (HTTP 203/302). Verifique se copiou o token completo."
+                return False, (
+                    "Token PAT inválido ou expirado. O Azure DevOps redirecionou para tela de login HTML (HTTP 203/302).\n\n"
+                    "Para gerar um novo token:\n"
+                    "1. No Azure DevOps (dev.azure.com/onebelezabemstar)\n"
+                    "2. Clique no ícone de configurações de usuário (ao lado do seu avatar)\n"
+                    "3. Clique nos três pontinhos > User settings > 'Personal access tokens'."
+                )
             elif resp.status_code in (401, 403):
-                return False, "Erro de autenticação (401/403). Verifique se o seu PAT Token está válido e tem permissão de 'Work Items (Read & Write)'."
+                return False, (
+                    "Erro de autenticação (401/403). Verifique se o seu PAT Token está válido e tem permissão de 'Work Items (Read & Write)'.\n\n"
+                    "Para pegar o token:\n"
+                    "1. No Azure DevOps (dev.azure.com/onebelezabemstar)\n"
+                    "2. Clique no ícone de configurações de usuário (ao lado do seu avatar)\n"
+                    "3. Clique nos três pontinhos > User settings > 'Personal access tokens'."
+                )
             elif resp.status_code == 404:
                 return False, f"Projeto '{project}' ou organização '{self.organization}' não encontrados (404)."
             else:
@@ -131,6 +182,84 @@ class AzureDevOpsClient:
         except Exception:
             pass
         return []
+
+    def get_assignable_users(self, project: str = None, extra_projects: list = None) -> list:
+        """Fetch list of assignable users across project teams and recent work items."""
+        if not self.organization or not self.pat:
+            return []
+
+        users_map = {}
+
+        def add_user(disp, uniq):
+            if not disp and not uniq:
+                return
+            c_email = clean_identity_email(uniq or disp)
+            c_disp = str(disp or c_email).strip()
+            if not c_disp:
+                return
+            key = c_email if c_email else c_disp.lower()
+            if key not in users_map:
+                users_map[key] = {
+                    "displayName": c_disp,
+                    "uniqueName": c_email or str(uniq or c_disp),
+                    "initials": get_identity_initials(c_disp),
+                    "color": get_avatar_color(c_disp)
+                }
+
+        projects_to_scan = []
+        if project and project.strip():
+            projects_to_scan.append(project.strip())
+        if extra_projects:
+            for p in extra_projects:
+                if p and isinstance(p, str) and p.strip() and p.strip() not in projects_to_scan:
+                    projects_to_scan.append(p.strip())
+
+        # 1. Fetch team members from projects
+        headers = self._get_headers()
+        for p in projects_to_scan[:6]:
+            try:
+                t_url = f"{self.base_url}/_apis/projects/{quote(p)}/teams?api-version=7.0"
+                resp = requests.get(t_url, headers=headers, timeout=8)
+                if resp.status_code == 200:
+                    teams = resp.json().get("value", [])
+                    for t in teams:
+                        t_id = t.get("id")
+                        if not t_id:
+                            continue
+                        m_url = f"{self.base_url}/_apis/projects/{quote(p)}/teams/{t_id}/members?api-version=7.0"
+                        m_resp = requests.get(m_url, headers=headers, timeout=8)
+                        if m_resp.status_code == 200:
+                            for mem in m_resp.json().get("value", []):
+                                ident = mem.get("identity", {})
+                                add_user(ident.get("displayName"), ident.get("uniqueName"))
+            except Exception:
+                pass
+
+        # 2. Fetch distinct users from recent work items via WIQL
+        try:
+            wiql_url = f"{self.base_url}/_apis/wit/wiql?api-version=7.0"
+            payload = {
+                "query": "SELECT [System.Id], [System.AssignedTo] FROM WorkItems WHERE [System.AssignedTo] <> '' ORDER BY [System.ChangedDate] DESC"
+            }
+            resp = requests.post(wiql_url, headers=headers, json=payload, timeout=8)
+            if resp.status_code == 200:
+                work_items = resp.json().get("workItems", [])
+                ids = [wi["id"] for wi in work_items[:80] if "id" in wi]
+                if ids:
+                    b_url = f"{self.base_url}/_apis/wit/workitemsbatch?api-version=7.0"
+                    b_resp = requests.post(b_url, headers=headers, json={"ids": ids, "fields": ["System.AssignedTo"]}, timeout=10)
+                    if b_resp.status_code == 200:
+                        for item in b_resp.json().get("value", []):
+                            ass = item.get("fields", {}).get("System.AssignedTo")
+                            if isinstance(ass, dict):
+                                add_user(ass.get("displayName"), ass.get("uniqueName") or ass.get("mailAddress"))
+                            elif ass:
+                                add_user(str(ass), "")
+        except Exception:
+            pass
+
+        return sorted(users_map.values(), key=lambda x: x["displayName"].lower())
+
 
     def get_work_item_fields(self, project: str, work_item_type: str):
         """Fetch fields available for a given project and work item type to map custom fields."""
@@ -266,6 +395,7 @@ class AzureDevOpsClient:
         noticed_at_iso: str = "",
         reported_by: str = "",
         urgency: str = "",
+        assigned_to: str = "",
         attachment_paths: list = None,
         extra_details_in_desc: str = ""
     ):
@@ -332,6 +462,9 @@ class AzureDevOpsClient:
 
         if iteration_path and iteration_path.strip():
             base_ops.append({"op": "add", "path": "/fields/System.IterationPath", "value": iteration_path.strip()})
+
+        if assigned_to and assigned_to.strip():
+            base_ops.append({"op": "add", "path": "/fields/System.AssignedTo", "value": assigned_to.strip()})
 
         custom_ops = []
         if noticed_at_iso:

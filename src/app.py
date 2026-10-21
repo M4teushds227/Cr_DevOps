@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import json
 import uuid
 import tempfile
@@ -28,7 +29,7 @@ from devops_api import AzureDevOpsClient, plain_text_to_html
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 GITHUB_REPO = "M4teushds227/Cr_DevOps"
 def get_app_data_dir():
     # Persist in user's %APPDATA%\DevOpsDemandas so tokens, settings and history survive updates permanently
@@ -44,6 +45,7 @@ def get_app_data_dir():
 APP_DIR = get_app_data_dir()
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 HISTORY_FILE = os.path.join(APP_DIR, "history.json")
+USERS_CACHE_FILE = os.path.join(APP_DIR, "users_cache.json")
 TEMP_ATTACH_DIR = os.path.join(tempfile.gettempdir(), "devops_demandas_attachments")
 os.makedirs(TEMP_ATTACH_DIR, exist_ok=True)
 
@@ -121,6 +123,254 @@ def save_json_file(path, data):
         print(f"Erro ao salvar {path}: {e}")
 
 
+class UserAutocompleteEntry(ctk.CTkFrame):
+    """
+    Autocomplete entry widget tailored to mimic Azure DevOps identity picker:
+    - Displays initials badge with authentic colors.
+    - Autocompletes user display name and email.
+    - Frameless dropdown positioned right beneath the input.
+    - Arrow navigation (Up/Down/Enter/Escape).
+    - Dropdown button (▼) to browse all assignable users.
+    - Fully compatible with standard CTkEntry methods (get, delete, insert, etc.).
+    """
+    def __init__(self, master, users=None, placeholder_text="Digite o nome ou e-mail...", height=30, **kwargs):
+        super().__init__(master, fg_color="transparent")
+        self.users = list(users or [])
+        self.filtered = []
+        self.selected_user = None
+        self.popup = None
+        self.active_index = -1
+        self._after_focus_id = None
+        self.row_items = []
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=0)
+
+        self.entry = ctk.CTkEntry(self, placeholder_text=placeholder_text, height=height, **kwargs)
+        self.entry.grid(row=0, column=0, sticky="ew")
+
+        self.btn_drop = ctk.CTkButton(
+            self,
+            text="▾",
+            width=26,
+            height=height,
+            fg_color="#2b2d30",
+            hover_color="#3e4249",
+            text_color="#cccccc",
+            command=self.toggle_popup
+        )
+        self.btn_drop.grid(row=0, column=1, sticky="ns", padx=(4, 0))
+
+        self.entry.bind("<KeyRelease>", self._on_key_release)
+        self.entry.bind("<FocusOut>", self._on_focus_out)
+        self.entry.bind("<Down>", self._on_arrow_down)
+        self.entry.bind("<Up>", self._on_arrow_up)
+        self.entry.bind("<Return>", self._on_enter)
+        self.entry.bind("<Escape>", lambda e: self.hide_popup())
+
+    def set_users(self, users):
+        self.users = list(users or [])
+
+    def get(self):
+        return self.entry.get()
+
+    def get_assigned_value(self):
+        val = self.entry.get().strip()
+        if not val:
+            return ""
+        if self.selected_user:
+            disp = self.selected_user.get("displayName", "").strip()
+            uniq = self.selected_user.get("uniqueName", "").strip()
+            if val.lower() == disp.lower() or val.lower() == uniq.lower():
+                return uniq if uniq else disp
+        return val
+
+    def delete(self, first, last=None):
+        self.entry.delete(first, last)
+
+    def insert(self, index, string):
+        self.entry.insert(index, string)
+
+    def configure(self, **kwargs):
+        self.entry.configure(**kwargs)
+
+    def focus_set(self):
+        self.entry.focus_set()
+
+    def toggle_popup(self):
+        if self.popup and self.popup.winfo_exists():
+            self.hide_popup()
+        else:
+            self._filter_and_show(force_all=True)
+
+    def _on_key_release(self, event):
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+            return
+        self.selected_user = None
+        self._filter_and_show()
+
+    def _on_focus_out(self, event):
+        self._after_focus_id = self.after(200, self._check_and_hide_popup)
+
+    def _check_and_hide_popup(self):
+        self._after_focus_id = None
+        try:
+            focused = self.focus_get()
+            if self.popup and self.popup.winfo_exists():
+                if focused and (focused == self.popup or str(focused).startswith(str(self.popup))):
+                    return
+        except Exception:
+            pass
+        self.hide_popup()
+
+    def _filter_and_show(self, force_all=False):
+        if not self.users:
+            self.hide_popup()
+            return
+
+        query = self.entry.get().strip().lower()
+        if force_all or not query:
+            self.filtered = list(self.users)
+        else:
+            self.filtered = []
+            for u in self.users:
+                d = u.get("displayName", "").lower()
+                e = u.get("uniqueName", "").lower()
+                if query in d or query in e:
+                    self.filtered.append(u)
+
+        if not self.filtered:
+            self.hide_popup()
+            return
+
+        self.active_index = -1
+        self._render_popup()
+
+    def _render_popup(self):
+        if self.popup is None or not self.popup.winfo_exists():
+            self.popup = tk.Toplevel(self)
+            self.popup.wm_overrideredirect(True)
+            self.popup.attributes("-topmost", True)
+            self.popup.configure(bg="#1e1e1e")
+
+        self.update_idletasks()
+        x = self.entry.winfo_rootx()
+        y = self.entry.winfo_rooty() + self.entry.winfo_height() + 2
+        w = max(self.entry.winfo_width(), 320)
+
+        for c in self.popup.winfo_children():
+            c.destroy()
+
+        container = tk.Frame(self.popup, bg="#252526", bd=1, relief="solid", highlightthickness=1, highlightbackground="#0078d4")
+        container.pack(fill="both", expand=True)
+
+        hdr = tk.Frame(container, bg="#1e1e1e")
+        hdr.pack(fill="x", padx=6, pady=(4, 2))
+        tk.Label(hdr, text=f"👤 DevOps Identidades ({len(self.filtered)})", bg="#1e1e1e", fg="#9cdcfe", font=("Segoe UI", 8, "bold")).pack(side="left")
+
+        max_items = min(len(self.filtered), 6)
+        calc_h = max_items * 48 + 36
+        scroll = ctk.CTkScrollableFrame(container, width=w - 10, height=calc_h - 36, fg_color="#252526")
+        scroll.pack(fill="both", expand=True, padx=2, pady=2)
+
+        self.row_items = []
+        for idx, u in enumerate(self.filtered):
+            row = tk.Frame(scroll, bg="#252526", cursor="hand2")
+            row.pack(fill="x", padx=2, pady=2)
+
+            initials = u.get("initials", "??")
+            color = u.get("color", "#0078d4")
+            avatar = tk.Label(
+                row,
+                text=initials,
+                bg=color,
+                fg="#ffffff",
+                font=("Segoe UI", 9, "bold"),
+                width=3,
+                height=1,
+                relief="flat"
+            )
+            avatar.pack(side="left", padx=(6, 8), pady=4)
+
+            tf = tk.Frame(row, bg="#252526")
+            tf.pack(side="left", fill="x", expand=True, pady=2)
+
+            name_lbl = tk.Label(tf, text=u.get("displayName", ""), bg="#252526", fg="#ffffff", font=("Segoe UI", 10, "bold"), anchor="w")
+            name_lbl.pack(fill="x")
+
+            email_lbl = tk.Label(tf, text=u.get("uniqueName", ""), bg="#252526", fg="#9e9e9e", font=("Segoe UI", 8), anchor="w")
+            email_lbl.pack(fill="x")
+
+            def make_click(target):
+                return lambda e: self._select_user(target)
+
+            def make_hover(rf, tc, nl, el, item_idx):
+                def on_enter(e):
+                    self.active_index = item_idx
+                    self._highlight_active()
+                return on_enter
+
+            click_handler = make_click(u)
+            for wgt in (row, avatar, tf, name_lbl, email_lbl):
+                wgt.bind("<Button-1>", click_handler)
+
+            on_enter = make_hover(row, tf, name_lbl, email_lbl, idx)
+            for wgt in (row, tf, name_lbl, email_lbl):
+                wgt.bind("<Enter>", on_enter)
+
+            self.row_items.append({"row": row, "tf": tf, "nl": name_lbl, "el": email_lbl, "user": u})
+
+        self.popup.wm_geometry(f"{w}x{calc_h}+{x}+{y}")
+        self.popup.deiconify()
+
+    def _highlight_active(self):
+        for idx, item in enumerate(self.row_items):
+            is_active = (idx == self.active_index)
+            bg = "#37373d" if is_active else "#252526"
+            item["row"].configure(bg=bg)
+            item["tf"].configure(bg=bg)
+            item["nl"].configure(bg=bg)
+            item["el"].configure(bg=bg)
+
+    def _select_user(self, user):
+        if self._after_focus_id:
+            self.after_cancel(self._after_focus_id)
+            self._after_focus_id = None
+        self.selected_user = user
+        disp = user.get("displayName", "")
+        self.entry.delete(0, "end")
+        self.entry.insert(0, disp)
+        self.hide_popup()
+        self.entry.focus_set()
+
+    def hide_popup(self):
+        if self.popup and self.popup.winfo_exists():
+            self.popup.destroy()
+            self.popup = None
+
+    def _on_arrow_down(self, event):
+        if not self.popup or not self.popup.winfo_exists():
+            self._filter_and_show(force_all=True)
+            return "break"
+        if self.row_items:
+            self.active_index = (self.active_index + 1) % len(self.row_items)
+            self._highlight_active()
+            return "break"
+
+    def _on_arrow_up(self, event):
+        if self.popup and self.popup.winfo_exists() and self.row_items:
+            self.active_index = (self.active_index - 1) % len(self.row_items)
+            self._highlight_active()
+            return "break"
+
+    def _on_enter(self, event):
+        if self.popup and self.popup.winfo_exists() and self.row_items:
+            idx = self.active_index if self.active_index >= 0 else 0
+            self._select_user(self.row_items[idx]["user"])
+            return "break"
+
+
+
 class DevOpsDemandasApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -135,6 +385,9 @@ class DevOpsDemandasApp(ctk.CTk):
         self.attachments = []  # List of dicts: {"path": str, "name": str, "is_temp": bool}
         self._queries_map = {}  # Map display name -> query_id in Dashboard tab
         self._dash_loaded_once = False
+        self.assignable_users = []
+        self._load_cached_users()
+        self._start_users_sync_thread()
 
         # Colors inspired by Azure DevOps Dark Theme
         self.bg_dark = "#1e1e1e"
@@ -149,6 +402,52 @@ class DevOpsDemandasApp(ctk.CTk):
         self._build_header()
         self._build_tabs()
         self._bind_shortcuts()
+
+    def _load_cached_users(self):
+        if os.path.exists(USERS_CACHE_FILE):
+            try:
+                with open(USERS_CACHE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.assignable_users = data
+            except Exception:
+                self.assignable_users = []
+
+    def _start_users_sync_thread(self, force=False):
+        org = self.config_data.get("organization")
+        pat = self.config_data.get("pat")
+        project = self.config_data.get("project")
+        projects_list = self.config_data.get("projects_list", [])
+        if not org or not pat:
+            return
+
+        def worker():
+            try:
+                client = AzureDevOpsClient(org, pat)
+                users = client.get_assignable_users(project=project, extra_projects=projects_list)
+                if users:
+                    self.assignable_users = users
+                    try:
+                        with open(USERS_CACHE_FILE, "w", encoding="utf-8") as f:
+                            json.dump(users, f, indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    self.after(0, self._update_active_user_autocompletes)
+            except Exception as e:
+                print("Erro ao sincronizar usuários em background:", e)
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+    def _update_active_user_autocompletes(self):
+        if hasattr(self, "ent_assigned_to") and self.ent_assigned_to:
+            self.ent_assigned_to.set_users(self.assignable_users)
+        if hasattr(self, "_active_edit_ent_assigned") and self._active_edit_ent_assigned:
+            try:
+                self._active_edit_ent_assigned.set_users(self.assignable_users)
+            except Exception:
+                pass
+
 
     # -------------------------------------------------------------------------
     # HEADER
@@ -550,24 +849,19 @@ class DevOpsDemandasApp(ctk.CTk):
         self.cmb_urgency.set(str(self.config_data.get("default_urgency", "4")))
         self.cmb_urgency.pack(fill="x", pady=(2, 0))
 
+        # Assigned To (Responsável)
+        ass_frame = ctk.CTkFrame(details_card, fg_color="transparent")
+        ass_frame.grid(row=3, column=0, sticky="ew", padx=14, pady=(3, 12))
+        ctk.CTkLabel(ass_frame, text="Assigned To (Responsável)", font=ctk.CTkFont(size=12), text_color=self.text_muted).pack(anchor="w")
+        self.ent_assigned_to = UserAutocompleteEntry(ass_frame, users=self.assignable_users, height=30, placeholder_text="Opcional: Atribuir a um dev...")
+        self.ent_assigned_to.pack(fill="x", pady=(2, 0))
+
+        # Area & Iteration (Ocultos da tela por padrão, mantendo compatibilidade de valores)
         ai_frame = ctk.CTkFrame(details_card, fg_color="transparent")
-        ai_frame.grid(row=3, column=0, sticky="ew", padx=14, pady=(4, 12))
-        ai_frame.grid_columnconfigure(0, weight=1)
-        ai_frame.grid_columnconfigure(1, weight=1)
-
-        area_box = ctk.CTkFrame(ai_frame, fg_color="transparent")
-        area_box.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ctk.CTkLabel(area_box, text="Area", font=ctk.CTkFont(size=12), text_color=self.text_muted).pack(anchor="w")
-        self.ent_area = ctk.CTkEntry(area_box, height=28)
+        self.ent_area = ctk.CTkEntry(ai_frame)
         self.ent_area.insert(0, self.config_data.get("default_area_path", "One_FrontEnd"))
-        self.ent_area.pack(fill="x", pady=(2, 0))
-
-        iter_box = ctk.CTkFrame(ai_frame, fg_color="transparent")
-        iter_box.grid(row=0, column=1, sticky="ew")
-        ctk.CTkLabel(iter_box, text="Iteration", font=ctk.CTkFont(size=12), text_color=self.text_muted).pack(anchor="w")
-        self.ent_iteration = ctk.CTkEntry(iter_box, height=28)
+        self.ent_iteration = ctk.CTkEntry(ai_frame)
         self.ent_iteration.insert(0, self.config_data.get("default_iteration_path", "One_FrontEnd"))
-        self.ent_iteration.pack(fill="x", pady=(2, 0))
 
         att_card = ctk.CTkFrame(
             right_col,
@@ -1407,8 +1701,9 @@ class DevOpsDemandasApp(ctk.CTk):
         ass_box = ctk.CTkFrame(meta_grid, fg_color="transparent")
         ass_box.grid(row=0, column=1, sticky="ew", padx=(0, 8))
         ctk.CTkLabel(ass_box, text="Assigned To (Responsável):", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.text_muted).pack(anchor="w")
-        ent_assigned = ctk.CTkEntry(ass_box, height=30, placeholder_text="Ex: alex.costa ou nome do dev")
+        ent_assigned = UserAutocompleteEntry(ass_box, users=self.assignable_users, height=30, placeholder_text="Digite o nome ou e-mail...")
         ent_assigned.pack(fill="x", pady=(2, 0))
+        self._active_edit_ent_assigned = ent_assigned
 
         # Urgency
         urg_box = ctk.CTkFrame(meta_grid, fg_color="transparent")
@@ -1729,6 +2024,9 @@ class DevOpsDemandasApp(ctk.CTk):
         def on_dlg_close():
             if getattr(self, "_active_edit_dlg", None) == dlg:
                 self._active_edit_dlg = None
+            if getattr(self, "_active_edit_ent_assigned", None) == ent_assigned:
+                self._active_edit_ent_assigned = None
+            ent_assigned.hide_popup()
             dlg.destroy()
 
         dlg.protocol("WM_DELETE_WINDOW", on_dlg_close)
@@ -1818,7 +2116,7 @@ class DevOpsDemandasApp(ctk.CTk):
                 return
 
             new_state = cmb_state.get().strip()
-            new_assigned = ent_assigned.get().strip()
+            new_assigned = ent_assigned.get_assigned_value().strip()
             new_urg = cmb_urg.get().strip()
             new_rep = ent_rep.get().strip()
             new_tags = ent_edit_tags.get().strip()
@@ -2042,9 +2340,12 @@ class DevOpsDemandasApp(ctk.CTk):
         help_box = ctk.CTkFrame(settings_scroll, fg_color="#1b1a19", corner_radius=6, border_width=1, border_color="#3b3a39")
         help_box.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(4, 12))
         help_text = (
-            "🔑 Como gerar seu Personal Access Token (PAT) no Azure DevOps:\n"
-            "1. No Azure DevOps (dev.azure.com/onebelezabemstar), clique no ícone de configurações de usuário (canto superior direito ao lado do seu avatar) > 'Personal access tokens'.\n"
-            "2. Clique em '+ New Token', dê um nome (ex: 'CadastroDemandas') e marque o escopo 'Work Items: Read, write, & manage'.\n"
+            "🔑 Como gerar seu Personal Access Token (PAT) no Azure DevOps:\n\n"
+            "1. No Azure DevOps (dev.azure.com/onebelezabemstar),\n"
+            "   clique no ícone de configurações de usuário (ao lado do seu avatar no canto superior direito)\n"
+            "   > Clique nos três pontinhos > User settings > 'Personal access tokens'.\n\n"
+            "2. Clique em '+ New Token', dê um nome (ex: 'CadastroDemandas')\n"
+            "   e marque o escopo 'Work Items: Read, write, & manage'.\n\n"
             "3. Copie o token gerado e cole no campo abaixo."
         )
         ctk.CTkLabel(
@@ -2298,6 +2599,16 @@ del "%~f0"
 
         threading.Thread(target=update_worker, daemon=True).start()
 
+    def _is_newer_version(self, remote_v: str, current_v: str) -> bool:
+        """Retorna True se remote_v for estritamente mais recente que current_v usando semver."""
+        try:
+            def parse_v(v_str):
+                clean = re.sub(r'[^0-9.]', '', str(v_str or "")).strip('.')
+                return [int(x) for x in clean.split('.') if x.isdigit()]
+            return parse_v(remote_v) > parse_v(current_v)
+        except Exception:
+            return False
+
     def check_for_updates(self, manual: bool = False):
         """Verifica no GitHub se existe uma release ou versão mais recente do código."""
         repo = GITHUB_REPO
@@ -2339,7 +2650,7 @@ del "%~f0"
 
                 def on_result():
                     self.btn_check_update.configure(state="normal", text="🔄 Verificar Atualizações")
-                    if new_version and new_version != APP_VERSION:
+                    if new_version and self._is_newer_version(new_version, APP_VERSION):
                         self.lbl_cfg_status.configure(
                             text=f"✨ Nova versão disponível: v{new_version} (Instalada: v{APP_VERSION})",
                             text_color="#ffaa73"
@@ -2791,6 +3102,8 @@ del "%~f0"
         self.var_auto_title.set(True)
         self._set_noticed_at_now()
         self._clear_attachments()
+        if hasattr(self, "ent_assigned_to") and self.ent_assigned_to:
+            self.ent_assigned_to.delete(0, "end")
         if not keep_feedback:
             self.lbl_feedback.configure(
                 text="Campos limpos. Pronto para cadastrar nova demanda.",
@@ -2822,6 +3135,10 @@ del "%~f0"
             messagebox.showwarning(
                 "Token PAT Necessário",
                 "Você ainda não configurou seu Personal Access Token (PAT) do Azure DevOps.\n\n"
+                "Para pegar o token:\n"
+                "1. No Azure DevOps (dev.azure.com/onebelezabemstar)\n"
+                "2. Clique no ícone de configurações de usuário (ao lado do seu avatar)\n"
+                "3. Clique nos três pontinhos > User settings > 'Personal access tokens'.\n\n"
                 "Por favor, preencha o token na aba '⚙️ Configurações' antes de cadastrar."
             )
             self.tabview.set("⚙️ Configurações")
@@ -2856,6 +3173,7 @@ del "%~f0"
         noticed_iso = self._parse_noticed_at_to_iso(noticed_raw)
         reported_by = self.ent_reported_by.get().strip()
         urgency = self.cmb_urgency.get().strip()
+        assigned_to = self.ent_assigned_to.get_assigned_value().strip() if hasattr(self, "ent_assigned_to") else ""
 
         _, description_html = self.build_description_content()
         extra_details_html = (
@@ -2863,6 +3181,8 @@ del "%~f0"
             f"<div><b>Reported By:</b> {reported_by}</div>"
             f"<div><b>Urgency:</b> {urgency}</div>"
         )
+        if assigned_to:
+            extra_details_html += f"<div><b>Assigned To:</b> {assigned_to}</div>"
         att_paths = [a["path"] for a in self.attachments]
 
         self.btn_submit.configure(state="disabled", text="⏳ Enviando para o DevOps...")
@@ -2885,6 +3205,7 @@ del "%~f0"
                     noticed_at_iso=noticed_iso,
                     reported_by=reported_by,
                     urgency=urgency,
+                    assigned_to=assigned_to,
                     attachment_paths=att_paths,
                     extra_details_in_desc=extra_details_html
                 )
